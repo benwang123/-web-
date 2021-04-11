@@ -14,120 +14,28 @@ const char *error_404_form = "The requested file was not found on this server.\n
 const char *error_500_title = "Internal Error";
 const char *error_500_form = "There was an unusual problem serving the request file.\n";
 
-locker m_lock;
-map<string, string> users;
-
-void http_conn::initmysql_result(connection_pool *connPool)
-{
-    //先从连接池中取一个连接
-    MYSQL *mysql = NULL;
-    connectionRAII mysqlcon(&mysql, connPool);
-
-    //在user表中检索username，passwd数据，浏览器端输入
-    if (mysql_query(mysql, "SELECT username,passwd FROM user"))
-    {
-        LOG_ERROR("SELECT error:%s\n", mysql_error(mysql));
-    }
-
-    //从表中检索完整的结果集
-    MYSQL_RES *result = mysql_store_result(mysql);
-
-    //返回结果集中的列数
-    int num_fields = mysql_num_fields(result);
-
-    //返回所有字段结构的数组
-    MYSQL_FIELD *fields = mysql_fetch_fields(result);
-
-    //从结果集中获取下一行，将对应的用户名和密码，存入map中
-    while (MYSQL_ROW row = mysql_fetch_row(result))
-    {
-        string temp1(row[0]);
-        string temp2(row[1]);
-        users[temp1] = temp2;
-    }
-}
-
-//对文件描述符设置非阻塞
-int setnonblocking(int fd)
-{
-    int old_option = fcntl(fd, F_GETFL);
-    int new_option = old_option | O_NONBLOCK;
-    fcntl(fd, F_SETFL, new_option);
-    return old_option;
-}
-
-//将内核事件表注册读事件，ET模式，选择开启EPOLLONESHOT
-void addfd(int epollfd, int fd, bool one_shot, int TRIGMode)
-{
-    epoll_event event;
-    event.data.fd = fd;
-
-    if (1 == TRIGMode)
-        event.events = EPOLLIN | EPOLLET | EPOLLRDHUP;
-    else
-        event.events = EPOLLIN | EPOLLRDHUP;
-
-    if (one_shot)
-        event.events |= EPOLLONESHOT;
-    epoll_ctl(epollfd, EPOLL_CTL_ADD, fd, &event);
-    setnonblocking(fd);
-}
-
-//从内核时间表删除描述符
-void removefd(int epollfd, int fd)
-{
-    epoll_ctl(epollfd, EPOLL_CTL_DEL, fd, 0);
-    close(fd);
-}
-
-//将事件重置为EPOLLONESHOT
-void modfd(int epollfd, int fd, int ev, int TRIGMode)
-{
-    epoll_event event;
-    event.data.fd = fd;
-
-    if (1 == TRIGMode)
-        event.events = ev | EPOLLET | EPOLLONESHOT | EPOLLRDHUP;
-    else
-        event.events = ev | EPOLLONESHOT | EPOLLRDHUP;
-
-    epoll_ctl(epollfd, EPOLL_CTL_MOD, fd, &event);
-}
-
 int http_conn::m_user_count = 0;
-int http_conn::m_epollfd = -1;
+int http_conn::m_TRIGMode   = 1;
 
 //关闭连接，关闭一个连接，客户总量减一
 void http_conn::close_conn(bool real_close)
 {
     if (real_close && (m_sockfd != -1))
     {
-        printf("close %d\n", m_sockfd);
-        removefd(m_epollfd, m_sockfd);
+        close(m_sockfd);
         m_sockfd = -1;
         m_user_count--;
     }
 }
 
 //初始化连接,外部调用初始化套接字地址
-void http_conn::init(int sockfd, const sockaddr_in &addr, char *root, int TRIGMode,
-                     int close_log, string user, string passwd, string sqlname)
+void http_conn::init(int sockfd, const sockaddr_in &addr, Epoll * _epoll)
 {
-    m_sockfd = sockfd;
+    m_sockfd  = sockfd;
     m_address = addr;
+    m_epoll   = _epoll;
 
-    addfd(m_epollfd, sockfd, true, m_TRIGMode);
     m_user_count++;
-
-    //当浏览器出现连接重置时，可能是网站根目录出错或http响应格式出错或者访问的文件中内容完全为空
-    doc_root = root;
-    m_TRIGMode = TRIGMode;
-    m_close_log = close_log;
-
-    strcpy(sql_user, user.c_str());
-    strcpy(sql_passwd, passwd.c_str());
-    strcpy(sql_name, sqlname.c_str());
-
     init();
 }
 
@@ -157,6 +65,11 @@ void http_conn::init()
     memset(m_read_buf, '\0', READ_BUFFER_SIZE);
     memset(m_write_buf, '\0', WRITE_BUFFER_SIZE);
     memset(m_real_file, '\0', FILENAME_LEN);
+}
+
+int http_conn::getfd()
+{
+    return m_sockfd;
 }
 
 //从状态机，用于分析出一行内容
@@ -391,9 +304,43 @@ http_conn::HTTP_CODE http_conn::do_request()
     int len = strlen(doc_root);
     //printf("m_url:%s\n", m_url);
     const char *p = strrchr(m_url, '/');
+    //从mysql连接池中取出一个连接
+    mysql_conn *mysql = NULL;
+    redis_conn * redis = NULL;
+    char sql_cmd[128];
+    char redis_cmd[128];
+    RedisResult result;
+    int ret;
 
+    mysql_connection_pool * mysql_pool = mysql_connection_pool::GetInstance();
+    if(NULL == mysql_pool)
+    {
+        return NO_RESOURCE;
+    }
+    redis_connection_pool * redis_pool = redis_connection_pool::GetInstance();
+
+    if(NULL == redis_pool)
+    {
+        return NO_RESOURCE;
+    }
+
+    connectionRAII<mysql_conn, mysql_connection_pool> mysqlcon(mysql, mysql_pool);
+    if(NULL == mysql)
+    {
+        return NO_RESOURCE;
+    }
+    connectionRAII<redis_conn, redis_connection_pool> rediscon(redis, redis_pool);
+    if(NULL == redis)
+    {
+        return NO_RESOURCE;
+    }
+
+    memset(sql_cmd, 0, sizeof(sql_cmd));
+    memset(redis_cmd, 0, sizeof(redis_cmd));
+    memset(&result, 0, sizeof(result));
+  
     //处理cgi
-    if (cgi == 1 && (*(p + 1) == '2' || *(p + 1) == '3'))
+    if (cgi == 1 && (*(p + 1) == '2' || *(p + 1) == '3' || *(p + 1) == '8'))
     {
 
         //根据标志判断是登录检测还是注册检测
@@ -417,84 +364,159 @@ http_conn::HTTP_CODE http_conn::do_request()
         for (i = i + 10; m_string[i] != '\0'; ++i, ++j)
             password[j] = m_string[i];
         password[j] = '\0';
-
+        //注册
         if (*(p + 1) == '3')
         {
-            //如果是注册，先检测数据库中是否有重名的
-            //没有重名的，进行增加数据
-            char *sql_insert = (char *)malloc(sizeof(char) * 200);
-            strcpy(sql_insert, "INSERT INTO user(username, passwd) VALUES(");
-            strcat(sql_insert, "'");
-            strcat(sql_insert, name);
-            strcat(sql_insert, "', '");
-            strcat(sql_insert, password);
-            strcat(sql_insert, "')");
-
-            if (users.find(name) == users.end())
+            snprintf(sql_cmd, sizeof(sql_cmd),"INSERT INTO user(username, passwd) VALUES('%s','%s')", name, password);
+            snprintf(redis_cmd, sizeof(redis_cmd),"SET %s %s", name, password);
+            string cmd(redis_cmd);
+            //先更新数据库，再更新缓存
+            if (mysql->SendCmd(sql_cmd))
             {
-                m_lock.lock();
-                int res = mysql_query(mysql, sql_insert);
-                users.insert(pair<string, string>(name, password));
-                m_lock.unlock();
-
-                if (!res)
+                if(_REDIS_OK == redis->SendCmd(cmd, result))
+                {
                     strcpy(m_url, "/log.html");
+                }
                 else
-                    strcpy(m_url, "/registerError.html");
+                {
+                    strcpy(m_url, "/registerError.html"); 
+                }
+
             }
             else
+            {
                 strcpy(m_url, "/registerError.html");
+            }
+
         }
-        //如果是登录，直接判断
+        //如果是登录，先查缓存，缓存中没有，查找数据库，然后将数据更新到缓存
         //若浏览器端输入的用户名和密码在表中可以查找到，返回1，否则返回0
         else if (*(p + 1) == '2')
         {
-            if (users.find(name) != users.end() && users[name] == password)
-                strcpy(m_url, "/welcome.html");
+            snprintf(redis_cmd, sizeof(redis_cmd),"GET %s", name);
+            string cmd(redis_cmd);
+            ret = redis->SendCmd(cmd, result);
+            
+            if(_REDIS_OK == ret)
+            {
+                if(strcmp(result.strdata.c_str(), password) == 0)
+                {
+                    strcpy(m_url, "/welcome.html");
+                }
+                else
+                {
+                    strcpy(m_url, "/logError.html");
+                }
+                
+            }
+            //缓存中没有找到数据，需要查询数据库
+            else if(_NIL_ERROR == ret)
+            {
+                
+                snprintf(sql_cmd, sizeof(sql_cmd),"SELECT passwd FROM user where name = '%s' ", name);
+                ret = mysql->SendCmd(sql_cmd);
+                if(!ret)
+                {
+                    strcpy(m_url, "/logError.html");
+                }
+                //从表中检索完整的结果集
+                vector<vector<string>> mysql_result = mysql->ParseContent();
+                if(0 == mysql_result.size())
+                {
+                    strcpy(m_url, "/logError.html");
+                }
+                else
+                {
+                    if(strcmp(mysql_result[0][0].c_str(), password) == 0)
+                    {
+                        strcpy(m_url, "/welcome.html");
+                    }
+                    else
+                    {
+                        strcpy(m_url, "/logError.html");
+                    }
+                    //更新到缓存中
+                    snprintf(redis_cmd, sizeof(redis_cmd),"SET %s %s", name, mysql_result[0][0].c_str());
+                    redis->SendCmd(redis_cmd, result);
+                     
+                }
+            }
+        }
+        //修改密码，为保证数据一致性，先删除缓存然后再更新数据库
+        else if (*(p + 1) == '8')
+        {
+            snprintf(redis_cmd, sizeof(redis_cmd),"DELETE %s", name);
+            string cmd(redis_cmd);
+            ret = redis->SendCmd(cmd, result);
+            if(_REDIS_OK == ret)
+            {
+                snprintf(sql_cmd, sizeof(sql_cmd),"UPDATE user SET passwd = '%s' WHERE username = '%s'", password, name);
+                
+                if( mysql->SendCmd(sql_cmd))
+                {
+                    strcpy(m_url, "/log.html"); 
+                }
+                else
+                {
+                    strcpy(m_url, "/changepasswdErr.html"); 
+                }
+                
+            }
             else
-                strcpy(m_url, "/logError.html");
+            {
+                strcpy(m_url, "/changepasswdErr.html"); 
+            }
+            
         }
     }
 
     if (*(p + 1) == '0')
     {
-        char *m_url_real = (char *)malloc(sizeof(char) * 200);
+        char *m_url_real = (char *)MempollMgr::Instance().alloc(200);
         strcpy(m_url_real, "/register.html");
         strncpy(m_real_file + len, m_url_real, strlen(m_url_real));
 
-        free(m_url_real);
+        MempollMgr::Instance().dealloc(m_url_real);
     }
     else if (*(p + 1) == '1')
     {
-        char *m_url_real = (char *)malloc(sizeof(char) * 200);
+        char *m_url_real = (char *)MempollMgr::Instance().alloc(200);
         strcpy(m_url_real, "/log.html");
         strncpy(m_real_file + len, m_url_real, strlen(m_url_real));
 
-        free(m_url_real);
+        MempollMgr::Instance().dealloc(m_url_real);
+    }
+    else if (*(p + 1) == '4')
+    {
+        char *m_url_real = (char *)MempollMgr::Instance().alloc(200);
+        strcpy(m_url_real, "/changepasswd.html");
+        strncpy(m_real_file + len, m_url_real, strlen(m_url_real));
+
+        MempollMgr::Instance().dealloc(m_url_real);
     }
     else if (*(p + 1) == '5')
     {
-        char *m_url_real = (char *)malloc(sizeof(char) * 200);
+        char *m_url_real = (char *)MempollMgr::Instance().alloc(200);
         strcpy(m_url_real, "/picture.html");
         strncpy(m_real_file + len, m_url_real, strlen(m_url_real));
 
-        free(m_url_real);
+        MempollMgr::Instance().dealloc(m_url_real);
     }
     else if (*(p + 1) == '6')
     {
-        char *m_url_real = (char *)malloc(sizeof(char) * 200);
+        char *m_url_real = (char *)MempollMgr::Instance().alloc(200);
         strcpy(m_url_real, "/video.html");
         strncpy(m_real_file + len, m_url_real, strlen(m_url_real));
 
-        free(m_url_real);
+        MempollMgr::Instance().dealloc(m_url_real);
     }
     else if (*(p + 1) == '7')
     {
-        char *m_url_real = (char *)malloc(sizeof(char) * 200);
+        char *m_url_real = (char *)MempollMgr::Instance().alloc(200);
         strcpy(m_url_real, "/fans.html");
         strncpy(m_real_file + len, m_url_real, strlen(m_url_real));
 
-        free(m_url_real);
+        MempollMgr::Instance().dealloc(m_url_real);
     }
     else
         strncpy(m_real_file + len, m_url, FILENAME_LEN - len - 1);
@@ -527,7 +549,7 @@ bool http_conn::write()
 
     if (bytes_to_send == 0)
     {
-        modfd(m_epollfd, m_sockfd, EPOLLIN, m_TRIGMode);
+        m_epoll->AddFd(m_sockfd, true, EPOLLIN, m_TRIGMode);
         init();
         return true;
     }
@@ -540,7 +562,7 @@ bool http_conn::write()
         {
             if (errno == EAGAIN)
             {
-                modfd(m_epollfd, m_sockfd, EPOLLOUT, m_TRIGMode);
+                m_epoll->AddFd(m_sockfd, true, EPOLLOUT, m_TRIGMode);
                 return true;
             }
             unmap();
@@ -564,7 +586,7 @@ bool http_conn::write()
         if (bytes_to_send <= 0)
         {
             unmap();
-            modfd(m_epollfd, m_sockfd, EPOLLIN, m_TRIGMode);
+            m_epoll->AddFd(m_sockfd, true, EPOLLIN, m_TRIGMode);
 
             if (m_linger)
             {
@@ -690,7 +712,7 @@ void http_conn::process()
     HTTP_CODE read_ret = process_read();
     if (read_ret == NO_REQUEST)
     {
-        modfd(m_epollfd, m_sockfd, EPOLLIN, m_TRIGMode);
+        m_epoll->AddFd(m_sockfd, true, EPOLLIN, m_TRIGMode);
         return;
     }
     bool write_ret = process_write(read_ret);
@@ -698,5 +720,5 @@ void http_conn::process()
     {
         close_conn();
     }
-    modfd(m_epollfd, m_sockfd, EPOLLOUT, m_TRIGMode);
+    m_epoll->AddFd(m_sockfd, true, EPOLLOUT, m_TRIGMode);
 }
