@@ -13,7 +13,7 @@
 #include <sys/epoll.h>
 #include <unordered_map>
 
-//#include "./epoller/epoller.h"
+#include "./epoller/epoller.h"
 #include "./threadpool/threadpool.h"
 #include "./memory/mempool.h"
 #include "./config.h"
@@ -22,7 +22,6 @@
 
 const int MAX_FD = 65536;           //最大文件描述符
 const int MAX_EVENT_NUMBER = 10000; //最大事件数
-const int TIMESLOT = 5;             //最小超时单位
 
 class WebServer
 {
