@@ -13,32 +13,54 @@ class threadpool
 {
 public:
     /*thread_number是线程池中线程的数量，max_requests是请求队列中最多允许的、等待处理的请求的数量*/
-    threadpool(int actor_model, connection_pool *connPool, int thread_number = 8, int max_request = 10000);
-    ~threadpool();
+    void init();
     bool append(T *request, int state);
     bool append_p(T *request);
 
 private:
-    /*工作线程运行的函数，它不断从工作队列中取出任务并执行之*/
+    threadpool();
+    ~threadpool();
+
+    /*工作线程运行的函数，它不断从工作队列中取出任务并执行*/
     static void *worker(void *arg);
     void run();
 
+public:
+    static int thread_number;        //线程池中的线程数
+    static int max_requests;         //请求队列中允许的最大请求数
+    static int actor_mode;
+
+    static threadpool * GetInstance();
 private:
-    int m_thread_number;        //线程池中的线程数
-    int m_max_requests;         //请求队列中允许的最大请求数
     pthread_t *m_threads;       //描述线程池的数组，其大小为m_thread_number
     std::list<T *> m_workqueue; //请求队列
     locker m_queuelocker;       //保护请求队列的互斥锁
     sem m_queuestat;            //是否有任务需要处理
-    connection_pool *m_connPool;  //数据库
-    int m_actor_model;          //模型切换
+    //mysql_connection_pool *m_connPool;  //数据库
 };
+
 template <typename T>
-threadpool<T>::threadpool( int actor_model, connection_pool *connPool, int thread_number, int max_requests) : m_actor_model(actor_model),m_thread_number(thread_number), m_max_requests(max_requests), m_threads(NULL),m_connPool(connPool)
+threadpool<T> * threadpool<T>::GetInstance()
+{
+    static threadpool t_pool;
+    return &t_pool;
+}
+
+template <typename T>
+int threadpool<T>::max_requests  = 100000;
+
+template <typename T>
+int threadpool<T>::actor_mode = 1;
+
+template <typename T>
+int threadpool<T>::thread_number = 8;
+
+template <typename T>
+void threadpool<T>::init()
 {
     if (thread_number <= 0 || max_requests <= 0)
         throw std::exception();
-    m_threads = new pthread_t[m_thread_number];
+    m_threads = new pthread_t[thread_number];
     if (!m_threads)
         throw std::exception();
     for (int i = 0; i < thread_number; ++i)
@@ -55,6 +77,13 @@ threadpool<T>::threadpool( int actor_model, connection_pool *connPool, int threa
         }
     }
 }
+
+template <typename T>
+threadpool<T>::threadpool()
+{
+    
+}
+
 template <typename T>
 threadpool<T>::~threadpool()
 {
@@ -64,7 +93,7 @@ template <typename T>
 bool threadpool<T>::append(T *request, int state)
 {
     m_queuelocker.lock();
-    if (m_workqueue.size() >= m_max_requests)
+    if (m_workqueue.size() >= max_requests)
     {
         m_queuelocker.unlock();
         return false;
@@ -79,7 +108,7 @@ template <typename T>
 bool threadpool<T>::append_p(T *request)
 {
     m_queuelocker.lock();
-    if (m_workqueue.size() >= m_max_requests)
+    if (m_workqueue.size() >= max_requests)
     {
         m_queuelocker.unlock();
         return false;
@@ -113,14 +142,14 @@ void threadpool<T>::run()
         m_queuelocker.unlock();
         if (!request)
             continue;
-        if (1 == m_actor_model)
+        if (1 == actor_mode)
         {
             if (0 == request->m_state)
             {
                 if (request->read_once())
                 {
                     request->improv = 1;
-                    connectionRAII mysqlcon(&request->mysql, m_connPool);
+                   // connectionRAII<MYSQL, mysql_connection_pool> mysqlcon(request->mysql, m_connPool);
                     request->process();
                 }
                 else
@@ -144,7 +173,7 @@ void threadpool<T>::run()
         }
         else
         {
-            connectionRAII mysqlcon(&request->mysql, m_connPool);
+           // connectionRAII<MYSQL, mysql_connection_pool> mysqlcon(request->mysql, m_connPool);
             request->process();
         }
     }
