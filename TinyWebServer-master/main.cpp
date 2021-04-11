@@ -6,7 +6,7 @@ using namespace std;
 int main(int argc, char *argv[])
 {
     Arg_t arg;
-    //命令行解析,后续修改为利用配置参数进行传参
+   
     Config config("webserver.cfg");
 
     config.init(&arg);
