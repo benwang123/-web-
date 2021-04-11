@@ -1,86 +1,109 @@
 #include "config.h"
+#include <iostream>
 
-Config::Config(){
-    //端口号,默认9006
-    PORT = 9006;
+Config::Config(string file):filename(file){}
 
-    //日志写入方式，默认同步
-    LOGWrite = 0;
+void Config::RemoveSpace(string &str)
+{
+    int start = 0, end = 0, pos = 0;
+    if(str.empty())
+    {
+        return;
+    }
+    for(pos = 0;pos < str.size();pos++)
+    {
+        if(str[pos] == ' '|| str[pos] == '\t' || str[pos] == '\r')
+        {
+            continue;
+        }
+        else
+        {
+            break;			
+        }
+        
+    }
+    if(pos == str.size())
+    {
+        str = "";
+        return;
+    }
 
-    //触发组合模式,默认listenfd LT + connfd LT
-    TRIGMode = 0;
+	start = pos;
 
-    //listenfd触发模式，默认LT
-    LISTENTrigmode = 0;
+    for(pos = str.size() - 1; pos > 0; pos--)
+    {
+        if(str[pos] == ' '|| str[pos] == '\t' || str[pos] == '\r') 
+        {
+            continue;
+        }
+        else
+        {
+            break;
+        }
+        
+    }
+    end = pos;
+    str = str.substr(start, end - start + 1);
 
-    //connfd触发模式，默认LT
-    CONNTrigmode = 0;
-
-    //优雅关闭链接，默认不使用
-    OPT_LINGER = 0;
-
-    //数据库连接池数量,默认8
-    sql_num = 8;
-
-    //线程池内的线程数量,默认8
-    thread_num = 8;
-
-    //关闭日志,默认不关闭
-    close_log = 0;
-
-    //并发模型,默认是proactor
-    actor_model = 0;
 }
 
-void Config::parse_arg(int argc, char*argv[]){
-    int opt;
-    const char *str = "p:l:m:o:s:t:c:a:";
-    while ((opt = getopt(argc, argv, str)) != -1)
+bool Config::ReadConfigFile()
+{
+    ifstream _file(filename);
+    string line, key, value;
+    int pos;
+    if(!_file)
     {
-        switch (opt)
-        {
-        case 'p':
-        {
-            PORT = atoi(optarg);
-            break;
-        }
-        case 'l':
-        {
-            LOGWrite = atoi(optarg);
-            break;
-        }
-        case 'm':
-        {
-            TRIGMode = atoi(optarg);
-            break;
-        }
-        case 'o':
-        {
-            OPT_LINGER = atoi(optarg);
-            break;
-        }
-        case 's':
-        {
-            sql_num = atoi(optarg);
-            break;
-        }
-        case 't':
-        {
-            thread_num = atoi(optarg);
-            break;
-        }
-        case 'c':
-        {
-            close_log = atoi(optarg);
-            break;
-        }
-        case 'a':
-        {
-            actor_model = atoi(optarg);
-            break;
-        }
-        default:
-            break;
-        }
+        return false;
     }
+    while(getline(_file,line))
+    {
+        //# 开头为注释
+        if(line.empty()||line[0] == '#')
+        {
+            continue;
+        }
+        if((pos = line.find('=')) == string:: npos)
+        {
+            continue;
+        }
+
+        key   = line.substr(0, pos);
+        value = line.substr(pos + 1, line.size() - pos -1);
+
+        RemoveSpace(key);
+
+        RemoveSpace(value);
+
+        m_map.insert(pair<string,string>(key,value));
+    }
+
+}
+void Config::parsearg(Arg_t * _arg)
+{
+    _arg->SERVER_PORT      = atoi(m_map["SERVER_PORT"].c_str());
+    _arg->LOGWrite         = atoi(m_map["LOGWrite"].c_str());
+    _arg->TRIGMode         = atoi(m_map["TRIGMode"].c_str());
+    _arg->OPT_LINGER       = atoi(m_map["OPT_LINGER"].c_str());
+    _arg->MYSQL_NUM        = atoi(m_map["MYSQL_NUM"].c_str());
+    _arg->MYSQL_ADDR       = m_map["MYSQL_ADDR"];
+    _arg->MYSQL_USER       = m_map["MYSQL_USER"];
+    _arg->MYSQL_PASSWD     = m_map["MYSQL_PASSWD"];
+    _arg->MYSQL_DB         = m_map["MYSQL_DB"];
+    _arg->MYSQL_CLOSE_LOG  = atoi(m_map["MYSQL_CLOSE_LOG"].c_str());
+    _arg->REDIS_NUM        = atoi(m_map["REDIS_NUM"].c_str());
+    _arg->REDIS_ADDR       = m_map["REDIS_ADDR"];
+    _arg->REDIS_PORT       = atoi(m_map["REDIS_PORT"].c_str());
+    _arg->REDIS_CLOSE_LOG  = atoi(m_map["REDIS_CLOSE_LOG"].c_str());
+    _arg->THREAD_NUM       = atoi(m_map["THREAD_NUM"].c_str());
+    _arg->CLOSE_LOG        = atoi(m_map["close_log"].c_str());
+    _arg->ACTOR_MODE       = atoi(m_map["actor_model"].c_str());
+}   
+
+void Config::init(Arg_t * arg)
+{
+	if(ReadConfigFile())
+	{
+		parsearg(arg);
+	}
 }
