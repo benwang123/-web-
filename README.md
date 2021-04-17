@@ -9,3 +9,5 @@
 4 支持reactor与proactor两种并发模型(epoll + 线程池)
 
 5 利用内存池来实现内存管理
+
+6 利用webbench进行压测，可实现过万http的并发连接
