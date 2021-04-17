@@ -6,6 +6,6 @@
 
 3 利用redis和mysql来实现数据库的配置，使用连接池实现
 
-4 支持reactor与proactor两种并发模型
+4 支持reactor与proactor两种并发模型(epoll + 线程池)
 
 5 利用内存池来实现内存管理
