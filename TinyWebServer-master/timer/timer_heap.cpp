@@ -10,7 +10,7 @@ void HeapTimer::siftup_(int i)
 {
     assert(i >= 0 && i < heap.size());
     int j = (i - 1) / 2;
-    while(j >= 0)
+    while(j >= 0 && i != j)
     {
         if(heap[j] < heap[i])
             break;       
@@ -63,8 +63,8 @@ void HeapTimer::add(int id, int timeout, TimeoutCallBack cb)
         timer.expires = timeout + time(NULL);
         timer.cb_func = cb;
         heap.push_back(timer);
-
-        siftup_(i);
+        if(i > 0)
+            siftup_(i);
     } 
     else 
     {
