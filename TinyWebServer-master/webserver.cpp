@@ -4,18 +4,7 @@
 
 WebServer::WebServer()
 {
-    //http_conn类对象
-   // users = new http_conn[MAX_FD];
-
-    //root文件夹路径
-    char server_path[200]; 
-    getcwd(server_path, 200);
-    char root[6] = "/root";
-    m_root = (char *)MempollMgr::Instance().alloc(strlen(server_path) + strlen(root) + 1);
-    strcpy(m_root, server_path);
-    strcat(m_root, root);
-
-    //users_timer = new client_data[MAX_FD];
+    LOG_INFO("Start hanyuren's server");
 }
 
 WebServer::~WebServer() 
@@ -30,6 +19,17 @@ WebServer::~WebServer()
     }
 
     _users.clear();
+}
+
+void WebServer::init_path()
+{
+    //root文件夹路径
+    char server_path[200]; 
+    getcwd(server_path, 200);
+    string root = "/root";
+    string tmp(server_path);
+    m_root = tmp;
+    m_root += root;
 }
 
 void WebServer::init(Arg_t * arg)
@@ -58,6 +58,9 @@ void WebServer::init(Arg_t * arg)
     threadpool<http_conn>::actor_mode    = arg->ACTOR_MODE;
     
     trig_mode();
+    init_path();
+
+    http_conn::root = m_root;
 
     epoller = Epoll::GetInstance();
     //定时器
@@ -188,7 +191,7 @@ void WebServer::eventListen()
 }
 
 bool WebServer::dealclinetdata()
-{
+{ 
     struct sockaddr_in client_address;
     socklen_t client_addrlength = sizeof(client_address);
     if (0 == m_LISTENTrigmode)
@@ -205,14 +208,11 @@ bool WebServer::dealclinetdata()
             LOG_ERROR("%s", "Internal server busy");
             return false;
         }
-
         http_conn * conn = new http_conn();
         conn->init(connfd, client_address,epoller);
-
         epoller->AddFd(connfd, true, EPOLLIN, 1);
-        _users[connfd] = conn;
         setnonblocking(connfd);
-
+        _users[connfd] = conn;
         timer->add(connfd, TIMEOUT,bind(&WebServer::closeconn,this, _users[connfd]));
     }
 
@@ -246,6 +246,8 @@ bool WebServer::dealclinetdata()
     }
     return true;
 }
+
+
 
 bool WebServer::dealwithsignal(bool &timeout, bool &stop_server)
 {
@@ -286,7 +288,7 @@ bool WebServer::dealwithsignal(bool &timeout, bool &stop_server)
 void WebServer::dealwithread(int sockfd)
 {
     //调整定时器
-    timer->adjust(sockfd, 3 * TIMEOUT);
+   // timer->adjust(sockfd, 3 * TIMEOUT);
     //reactor
     if (1 == m_actormodel)
     {
@@ -327,7 +329,7 @@ void WebServer::dealwithread(int sockfd)
 
 void WebServer::dealwithwrite(int sockfd)
 {
-    timer->adjust(sockfd, 3 * TIMEOUT);
+    //timer->adjust(sockfd, 3 * TIMEOUT);
     //reactor
     if (1 == m_actormodel)
     {
@@ -383,7 +385,6 @@ void WebServer::eventLoop()
             //处理新到的客户连接
             if (sockfd == m_listenfd)
             {
-                //std::cout<<"connect"<<endl;
                 bool flag = dealclinetdata();
                 if (false == flag)
                     continue;

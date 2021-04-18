@@ -12,8 +12,9 @@
 #include <cassert>
 #include <sys/epoll.h>
 #include <unordered_map>
+#include <string>
 
-#include "./epoller/epoller.h"
+//#include "./epoller/epoller.h"
 #include "./threadpool/threadpool.h"
 #include "./memory/mempool.h"
 #include "./config.h"
@@ -22,6 +23,7 @@
 
 const int MAX_FD = 65536;           //最大文件描述符
 const int MAX_EVENT_NUMBER = 10000; //最大事件数
+const int TIMESLOT = 5;             //最小超时单位
 
 class WebServer
 {
@@ -44,7 +46,6 @@ public:
 private:
     //基础
     int m_port;
-    char *m_root;
     int m_log_write;
     int m_actormodel;
 
@@ -54,13 +55,14 @@ private:
     int m_LISTENTrigmode;
     int m_CONNTrigmode;
 
+    string m_root;
+
     Epoll * epoller;
     unordered_map<int, http_conn *> _users;
     HeapTimer * timer;
 
     void closeconn(http_conn * conn);
-
-    void Add(int a);
+    void init_path();
 
 public:
 
