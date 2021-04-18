@@ -288,7 +288,7 @@ bool WebServer::dealwithsignal(bool &timeout, bool &stop_server)
 void WebServer::dealwithread(int sockfd)
 {
     //调整定时器
-   // timer->adjust(sockfd, 3 * TIMEOUT);
+    timer->adjust(sockfd, 3 * TIMEOUT);
     //reactor
     if (1 == m_actormodel)
     {
@@ -329,7 +329,7 @@ void WebServer::dealwithread(int sockfd)
 
 void WebServer::dealwithwrite(int sockfd)
 {
-    //timer->adjust(sockfd, 3 * TIMEOUT);
+    timer->adjust(sockfd, 3 * TIMEOUT);
     //reactor
     if (1 == m_actormodel)
     {
