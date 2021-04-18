@@ -16,6 +16,8 @@ const char *error_500_form = "There was an unusual problem serving the request f
 
 int http_conn::m_user_count = 0;
 int http_conn::m_TRIGMode   = 1;
+string http_conn::root = "../root";
+
 
 //关闭连接，关闭一个连接，客户总量减一
 void http_conn::close_conn(bool real_close)
@@ -61,6 +63,7 @@ void http_conn::init()
     m_state = 0;
     timer_flag = 0;
     improv = 0;
+    doc_root = root;
 
     memset(m_read_buf, '\0', READ_BUFFER_SIZE);
     memset(m_write_buf, '\0', WRITE_BUFFER_SIZE);
@@ -300,9 +303,8 @@ http_conn::HTTP_CODE http_conn::process_read()
 
 http_conn::HTTP_CODE http_conn::do_request()
 {
-    strcpy(m_real_file, doc_root);
-    int len = strlen(doc_root);
-    //printf("m_url:%s\n", m_url);
+    strcpy(m_real_file, doc_root.c_str());
+    int len = doc_root.size();
     const char *p = strrchr(m_url, '/');
     //从mysql连接池中取出一个连接
     mysql_conn *mysql = NULL;
@@ -310,7 +312,7 @@ http_conn::HTTP_CODE http_conn::do_request()
     char sql_cmd[128];
     char redis_cmd[128];
     RedisResult result;
-    int ret;
+    int ret; 
 
     mysql_connection_pool * mysql_pool = mysql_connection_pool::GetInstance();
     if(NULL == mysql_pool)
@@ -652,54 +654,54 @@ bool http_conn::process_write(HTTP_CODE ret)
 {
     switch (ret)
     {
-    case INTERNAL_ERROR:
-    {
-        add_status_line(500, error_500_title);
-        add_headers(strlen(error_500_form));
-        if (!add_content(error_500_form))
-            return false;
-        break;
-    }
-    case BAD_REQUEST:
-    {
-        add_status_line(404, error_404_title);
-        add_headers(strlen(error_404_form));
-        if (!add_content(error_404_form))
-            return false;
-        break;
-    }
-    case FORBIDDEN_REQUEST:
-    {
-        add_status_line(403, error_403_title);
-        add_headers(strlen(error_403_form));
-        if (!add_content(error_403_form))
-            return false;
-        break;
-    }
-    case FILE_REQUEST:
-    {
-        add_status_line(200, ok_200_title);
-        if (m_file_stat.st_size != 0)
+        case INTERNAL_ERROR:
         {
-            add_headers(m_file_stat.st_size);
-            m_iv[0].iov_base = m_write_buf;
-            m_iv[0].iov_len = m_write_idx;
-            m_iv[1].iov_base = m_file_address;
-            m_iv[1].iov_len = m_file_stat.st_size;
-            m_iv_count = 2;
-            bytes_to_send = m_write_idx + m_file_stat.st_size;
-            return true;
-        }
-        else
-        {
-            const char *ok_string = "<html><body></body></html>";
-            add_headers(strlen(ok_string));
-            if (!add_content(ok_string))
+            add_status_line(500, error_500_title);
+            add_headers(strlen(error_500_form));
+            if (!add_content(error_500_form))
                 return false;
+            break;
         }
-    }
-    default:
-        return false;
+        case BAD_REQUEST:
+        {
+            add_status_line(404, error_404_title);
+            add_headers(strlen(error_404_form));
+            if (!add_content(error_404_form))
+                return false;
+            break;
+        }
+        case FORBIDDEN_REQUEST:
+        {
+            add_status_line(403, error_403_title);
+            add_headers(strlen(error_403_form));
+            if (!add_content(error_403_form))
+                return false;
+            break;
+        }
+        case FILE_REQUEST:
+        {
+            add_status_line(200, ok_200_title);
+            if (m_file_stat.st_size != 0)
+            {
+                add_headers(m_file_stat.st_size);
+                m_iv[0].iov_base = m_write_buf;
+                m_iv[0].iov_len = m_write_idx;
+                m_iv[1].iov_base = m_file_address;
+                m_iv[1].iov_len = m_file_stat.st_size;
+                m_iv_count = 2;
+                bytes_to_send = m_write_idx + m_file_stat.st_size;
+                return true;
+            }
+            else
+            {
+                const char *ok_string = "<html><body></body></html>";
+                add_headers(strlen(ok_string));
+                if (!add_content(ok_string))
+                    return false;
+            }
+        }
+        default:
+            return false;
     }
     m_iv[0].iov_base = m_write_buf;
     m_iv[0].iov_len = m_write_idx;
@@ -720,5 +722,5 @@ void http_conn::process()
     {
         close_conn();
     }
-    m_epoll->AddFd(m_sockfd, true, EPOLLOUT, m_TRIGMode);
+    m_epoll->ModFd(m_sockfd, true, EPOLLOUT, m_TRIGMode);
 }

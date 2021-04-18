@@ -21,6 +21,7 @@
 #include <sys/wait.h>
 #include <sys/uio.h>
 #include <map>
+#include <string>
 
 #include "../lock/locker.h"
 #include "../epoller/epoller.h"
@@ -37,7 +38,7 @@ public:
     static const int WRITE_BUFFER_SIZE = 1024;
 
     static int m_TRIGMode ;
-    static char * root;
+    static string root;
     static int close_log;
 
     enum METHOD
@@ -119,6 +120,8 @@ private:
 public:
     static int m_epollfd;
     static int m_user_count;
+    MYSQL *mysql;
+    
     int m_state;  //读为0, 写为1
 
 private:
@@ -130,10 +133,10 @@ private:
     int m_checked_idx;
     int m_start_line;
     char m_write_buf[WRITE_BUFFER_SIZE];
+    char m_real_file[FILENAME_LEN];
     int m_write_idx;
     CHECK_STATE m_check_state;
     METHOD m_method;
-    char m_real_file[FILENAME_LEN];
     char *m_url;
     char *m_version;
     char *m_host;
@@ -147,8 +150,7 @@ private:
     char *m_string; //存储请求头数据
     int bytes_to_send;
     int bytes_have_send;
-    char *doc_root;
-
+    string doc_root;
     int m_close_log;
 
 };
